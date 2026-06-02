@@ -271,6 +271,65 @@ def search_pills():
 def health():
     return jsonify({"status": "ok", "classes": len(YOLO_CLASS_NAMES)})
 
+# ── 🚨 추가된 관리자 전용 웹페이지 (한눈에 보기) 🚨 ────────────────────
+@app.route("/admin", methods=["GET"])
+def admin_page():
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        # 유저 목록 가져오기
+        cur.execute("SELECT user_id FROM users")
+        users = cur.fetchall()
+        
+        # 문의 내역 최신순으로 가져오기
+        cur.execute("SELECT id, user_id, category, title, content, created_at FROM inquiries ORDER BY id DESC")
+        inquiries = cur.fetchall()
+    except Exception as e:
+        users = []
+        inquiries = []
+    finally:
+        conn.close()
+
+    # 파이썬으로 HTML 표 그리기
+    user_rows = "".join([f"<tr><td>{u[0]}</td></tr>" for u in users])
+    inquiry_rows = "".join([f"<tr><td>{i[0]}</td><td>{i[2]}</td><td>{i[1]}</td><td><b>{i[3]}</b></td><td>{i[4]}</td><td>{i[5]}</td></tr>" for i in inquiries])
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>관리자 통제실</title>
+        <style>
+            body {{ font-family: 'Malgun Gothic', sans-serif; padding: 20px; background-color: #f4f7f6; }}
+            h1 {{ color: #2c3e50; }}
+            h2 {{ color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 5px; display: inline-block; margin-top: 30px; }}
+            table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }}
+            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
+            th {{ background-color: #3498db; color: white; }}
+            tr:hover {{ background-color: #f1f1f1; }}
+        </style>
+    </head>
+    <body>
+        <h1>💊 알약 매니저 관리자 화면</h1>
+        
+        <h2>👥 가입한 유저 목록 (총 {len(users)}명)</h2>
+        <table>
+            <tr><th>유저 아이디</th></tr>
+            {user_rows if user_rows else "<tr><td>가입한 유저가 없습니다.</td></tr>"}
+        </table>
+        
+        <h2>📝 고객센터 문의 내역 (총 {len(inquiries)}건)</h2>
+        <table>
+            <tr><th>번호</th><th>분류</th><th>아이디</th><th>제목</th><th>내용</th><th>작성시간</th></tr>
+            {inquiry_rows if inquiry_rows else "<tr><td colspan='6'>접수된 문의가 없습니다.</td></tr>"}
+        </table>
+    </body>
+    </html>
+    """
+    return html
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
