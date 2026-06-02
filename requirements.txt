@@ -1,2 +1,5 @@
 flask>=3.0.0
 ultralytics>=8.0.0
+gunicorn
+Pillow
+numpy
