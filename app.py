@@ -15,7 +15,7 @@ DB 에는 실제로 인식 가능한 이름 약 8종만 저장
 
 from flask import Flask, request, jsonify
 from ultralytics import YOLO
-import sqlite3, os, tempfile
+import sqlite3, os, tempfile, hashlib
 
 app = Flask(__name__)
 
@@ -50,11 +50,28 @@ def get_db():
     return sqlite3.connect(DB_PATH)
 
 
+def init_db():
+    """서버 시작 시 테이블 초기화"""
+    conn = get_db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        password TEXT NOT NULL
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS inquiries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        category TEXT,
+        title TEXT,
+        content TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""")
+    conn.commit()
+    conn.close()
+
+init_db()
+
+
 def find_pill_by_name(pill_name: str):
-    """
-    사용자가 입력한 약 이름으로 pills_number 조회.
-    부분 일치(LIKE) 사용 → '게보린'으로 검색해도 '게보린정' 매칭.
-    """
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -69,22 +86,103 @@ def find_pill_by_name(pill_name: str):
         conn.close()
 
 
+# ── 회원가입 ───────────────────────────────────────────────
+@app.route("/register", methods=["POST"])
+def register():
+    data = request.get_json()
+    user_id = data.get("user_id", "").strip()
+    password = data.get("password", "").strip()
+
+    if not user_id or not password:
+        return jsonify({"success": False, "message": "아이디/비밀번호를 입력하세요."}), 400
+
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+
+    conn = get_db()
+    try:
+        conn.execute("INSERT INTO users (user_id, password) VALUES (?, ?)", (user_id, pw_hash))
+        conn.commit()
+        return jsonify({"success": True, "message": "회원가입 완료!"})
+    except sqlite3.IntegrityError:
+        return jsonify({"success": False, "message": "이미 존재하는 아이디입니다."}), 409
+    finally:
+        conn.close()
+
+
+# ── 아이디 중복 확인 ───────────────────────────────────────
+@app.route("/check_id", methods=["POST"])
+def check_id():
+    data = request.get_json()
+    user_id = data.get("user_id", "").strip()
+
+    if not user_id:
+        return jsonify({"success": False, "message": "아이디를 입력하세요."}), 400
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+        row = cur.fetchone()
+        if row:
+            return jsonify({"success": False, "message": "이미 사용 중인 아이디예요."})
+        else:
+            return jsonify({"success": True, "message": "사용 가능한 아이디예요! ✅"})
+    finally:
+        conn.close()
+
+
+# ── 로그인 ─────────────────────────────────────────────────
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    user_id = data.get("user_id", "").strip()
+    password = data.get("password", "").strip()
+
+    if not user_id or not password:
+        return jsonify({"success": False, "message": "아이디/비밀번호를 입력하세요."}), 400
+
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM users WHERE user_id=? AND password=?", (user_id, pw_hash))
+        row = cur.fetchone()
+        if row:
+            return jsonify({"success": True, "message": "로그인 성공!"})
+        else:
+            return jsonify({"success": False, "message": "아이디 또는 비밀번호가 틀렸어요."}), 401
+    finally:
+        conn.close()
+
+
+# ── 고객센터 문의 ──────────────────────────────────────────
+@app.route("/inquiry", methods=["POST"])
+def inquiry():
+    data = request.get_json()
+    user_id = data.get("user_id", "익명")
+    category = data.get("category", "")
+    title = data.get("title", "")
+    content = data.get("content", "")
+
+    if not title or not content:
+        return jsonify({"success": False, "message": "제목과 내용을 입력하세요."}), 400
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO inquiries (user_id, category, title, content) VALUES (?, ?, ?, ?)",
+            (user_id, category, title, content)
+        )
+        conn.commit()
+        return jsonify({"success": True, "message": "문의가 접수됐어요!"})
+    finally:
+        conn.close()
+
+
 # ── 메인 API: 알약 검증 ────────────────────────────────────
 @app.route("/verify_pill", methods=["POST"])
 def verify_pill():
-    """
-    Flutter 앱 → multipart/form-data
-      pill_name : 사용자 입력 약 이름 (예: "게보린정")
-      image     : 카메라 촬영 이미지
-
-    Response JSON:
-      match           : true / false
-      input_pill_name : 사용자 입력값
-      detected_name   : YOLO가 인식한 약 이름
-      confidence      : 인식 신뢰도 (0.0~1.0)
-      message         : 결과 설명 문자열
-    """
-    # 1) 요청 검증
     if "pill_name" not in request.form:
         return jsonify({"error": "pill_name 이 없습니다."}), 400
     if "image" not in request.files:
@@ -93,7 +191,6 @@ def verify_pill():
     pill_name  = request.form["pill_name"].strip()
     image_file = request.files["image"]
 
-    # 2) DB 에서 약 이름 확인 (입력값 유효성 체크)
     db_number, db_name = find_pill_by_name(pill_name)
     if db_number is None:
         return jsonify({
@@ -104,7 +201,6 @@ def verify_pill():
             "message"         : f"'{pill_name}'은 등록된 약이 아닙니다."
         }), 404
 
-    # 3) 이미지 임시 저장 후 YOLO 추론
     suffix = os.path.splitext(image_file.filename or ".jpg")[-1] or ".jpg"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         image_file.save(tmp.name)
@@ -115,7 +211,6 @@ def verify_pill():
     finally:
         os.remove(tmp_path)
 
-    # 4) 추론 결과 파싱 (confidence 가장 높은 박스 선택)
     detected_name = None
     confidence    = None
 
@@ -126,13 +221,11 @@ def verify_pill():
         class_id  = int(boxes.cls[best_idx])
         detected_name = YOLO_CLASS_NAMES.get(class_id, f"class_{class_id}")
 
-    # 5) 대조: DB 약 이름 vs YOLO 감지 이름 (공백·대소문자 무시)
     match = (
         detected_name is not None
         and db_name.strip() == detected_name.strip()
     )
 
-    # 6) 메시지 생성
     if detected_name is None:
         message = "이미지에서 알약을 감지하지 못했습니다. 밝은 곳에서 다시 촬영해주세요."
     elif match:
@@ -150,10 +243,9 @@ def verify_pill():
     })
 
 
-# ── 알약 검색 API (Flutter 드롭다운/자동완성용) ────────────
+# ── 알약 검색 API ──────────────────────────────────────────
 @app.route("/pills/search", methods=["GET"])
 def search_pills():
-    """GET /pills/search?q=게보린"""
     q = request.args.get("q", "").strip()
     if not q:
         return jsonify({"error": "검색어 q 를 입력하세요."}), 400
