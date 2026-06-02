@@ -3,14 +3,6 @@ app.py  ─  Pill_Service 백엔드 메인 서버
 ──────────────────────────────────────────
 실행:  python app.py
 포트:  5000
-
-YOLOv8 클래스 매핑 (data.yaml 기준)
-  0: K-027567   1: K-030512   2: K-041140   3: K-043800
-  4: 게보린정    5: 둘코락스   6: 렉스펜정   7: 로스토정
-  8: 슬리펠정   9: 씬지록신정  10: 알러비정  11: 캐롤에프정
-
-DB 에는 실제로 인식 가능한 이름 약 8종만 저장
-  (코드명 0~3번은 학습은 됐지만 서비스에서는 제외)
 """
 
 from flask import Flask, request, jsonify
@@ -24,7 +16,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH  = os.path.join(BASE_DIR, "pills.db")
 PT_PATH  = os.path.join(BASE_DIR, "best.pt")
 
-# ── YOLO 클래스 ID → 알약 이름 매핑 (data.yaml 그대로) ───
+# ── YOLO 클래스 ID → 알약 이름 매핑 ──────────────────────────
 YOLO_CLASS_NAMES = {
     0: "K-027567",
     1: "K-030512",
@@ -40,18 +32,15 @@ YOLO_CLASS_NAMES = {
     11: "캐롤에프정",
 }
 
-# ── 모델 로드 (서버 시작 시 1회) ──────────────────────────
+# ── 모델 로드 ─────────────────────────────────────────────
 model = YOLO(PT_PATH)
 print(f"✅ YOLOv8 모델 로드 완료: {PT_PATH}")
-
 
 # ── DB 유틸 ────────────────────────────────────────────────
 def get_db():
     return sqlite3.connect(DB_PATH)
 
-
 def init_db():
-    """서버 시작 시 테이블 초기화"""
     conn = get_db()
     conn.execute("""CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -70,21 +59,20 @@ def init_db():
 
 init_db()
 
-
 def find_pill_by_name(pill_name: str):
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT pills_number, pills_name FROM pills_data "
-            "WHERE pills_name LIKE ?",
+            "SELECT pills_number, pills_name FROM pills_data WHERE pills_name LIKE ?",
             (f"%{pill_name.strip()}%",)
         )
         row = cur.fetchone()
         return (str(row[0]), row[1]) if row else (None, None)
+    except Exception:
+        return (None, None)
     finally:
         conn.close()
-
 
 # ── 회원가입 ───────────────────────────────────────────────
 @app.route("/register", methods=["POST"])
@@ -108,7 +96,6 @@ def register():
     finally:
         conn.close()
 
-
 # ── 아이디 중복 확인 ───────────────────────────────────────
 @app.route("/check_id", methods=["POST"])
 def check_id():
@@ -122,14 +109,12 @@ def check_id():
     try:
         cur = conn.cursor()
         cur.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
-        row = cur.fetchone()
-        if row:
+        if cur.fetchone():
             return jsonify({"success": False, "message": "이미 사용 중인 아이디예요."})
         else:
             return jsonify({"success": True, "message": "사용 가능한 아이디예요! ✅"})
     finally:
         conn.close()
-
 
 # ── 로그인 ─────────────────────────────────────────────────
 @app.route("/login", methods=["POST"])
@@ -147,14 +132,12 @@ def login():
     try:
         cur = conn.cursor()
         cur.execute("SELECT user_id FROM users WHERE user_id=? AND password=?", (user_id, pw_hash))
-        row = cur.fetchone()
-        if row:
+        if cur.fetchone():
             return jsonify({"success": True, "message": "로그인 성공!"})
         else:
             return jsonify({"success": False, "message": "아이디 또는 비밀번호가 틀렸어요."}), 401
     finally:
         conn.close()
-
 
 # ── 고객센터 문의 ──────────────────────────────────────────
 @app.route("/inquiry", methods=["POST"])
@@ -179,7 +162,6 @@ def inquiry():
     finally:
         conn.close()
 
-
 # ── 메인 API: 알약 검증 ────────────────────────────────────
 @app.route("/verify_pill", methods=["POST"])
 def verify_pill():
@@ -194,11 +176,11 @@ def verify_pill():
     db_number, db_name = find_pill_by_name(pill_name)
     if db_number is None:
         return jsonify({
-            "match"           : False,
-            "input_pill_name" : pill_name,
-            "detected_name"   : None,
-            "confidence"      : None,
-            "message"         : f"'{pill_name}'은 등록된 약이 아닙니다."
+            "match": False,
+            "input_pill_name": pill_name,
+            "detected_name": None,
+            "confidence": None,
+            "message": f"'{pill_name}'은 등록된 약이 아닙니다."
         }), 404
 
     suffix = os.path.splitext(image_file.filename or ".jpg")[-1] or ".jpg"
@@ -223,6 +205,7 @@ def verify_pill():
 
     match = (
         detected_name is not None
+        and db_name is not None
         and db_name.strip() == detected_name.strip()
     )
 
@@ -235,13 +218,12 @@ def verify_pill():
         message = f"❌ 불일치: 입력한 약은 '{pill_name}'이지만 촬영된 약은 '{detected_name}'입니다."
 
     return jsonify({
-        "match"           : match,
-        "input_pill_name" : pill_name,
-        "detected_name"   : detected_name,
-        "confidence"      : round(confidence, 4) if confidence is not None else None,
-        "message"         : message
+        "match": match,
+        "input_pill_name": pill_name,
+        "detected_name": detected_name,
+        "confidence": round(confidence, 4) if confidence is not None else None,
+        "message": message
     })
-
 
 # ── 알약 검색 API ──────────────────────────────────────────
 @app.route("/pills/search", methods=["GET"])
@@ -260,28 +242,24 @@ def search_pills():
     conn.close()
 
     return jsonify({
-        "query"  : q,
-        "count"  : len(rows),
+        "query": q,
+        "count": len(rows),
         "results": [{"pills_number": r[0], "pills_name": r[1]} for r in rows]
     })
-
 
 # ── 헬스체크 ───────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "classes": len(YOLO_CLASS_NAMES)})
 
-# ── 🚨 추가된 관리자 전용 웹페이지 (한눈에 보기) 🚨 ────────────────────
+# ── 🚨 관리자 전용 웹페이지 (이게 빠져있었음!!) 🚨 ───────────
 @app.route("/admin", methods=["GET"])
 def admin_page():
     conn = get_db()
     try:
         cur = conn.cursor()
-        # 유저 목록 가져오기
         cur.execute("SELECT user_id FROM users")
         users = cur.fetchall()
-        
-        # 문의 내역 최신순으로 가져오기
         cur.execute("SELECT id, user_id, category, title, content, created_at FROM inquiries ORDER BY id DESC")
         inquiries = cur.fetchall()
     except Exception as e:
@@ -290,7 +268,6 @@ def admin_page():
     finally:
         conn.close()
 
-    # 파이썬으로 HTML 표 그리기
     user_rows = "".join([f"<tr><td>{u[0]}</td></tr>" for u in users])
     inquiry_rows = "".join([f"<tr><td>{i[0]}</td><td>{i[2]}</td><td>{i[1]}</td><td><b>{i[3]}</b></td><td>{i[4]}</td><td>{i[5]}</td></tr>" for i in inquiries])
 
@@ -305,7 +282,7 @@ def admin_page():
             body {{ font-family: 'Malgun Gothic', sans-serif; padding: 20px; background-color: #f4f7f6; }}
             h1 {{ color: #2c3e50; }}
             h2 {{ color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 5px; display: inline-block; margin-top: 30px; }}
-            table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }}
+            table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); margin-bottom: 20px; }}
             th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
             th {{ background-color: #3498db; color: white; }}
             tr:hover {{ background-color: #f1f1f1; }}
